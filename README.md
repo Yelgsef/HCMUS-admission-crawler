@@ -7,8 +7,6 @@ Python crawlers to collect admission results from HCMUS (tsdh.hcmus.edu.vn) and 
 - `dob.py`: Crawl date of birth (DOB) for accepted rows by parsing hidden notice HTML and export CSV/JSON.
 - `crawl.py`: Crawl THPT exam scores from the Tuổi Trẻ API and export NDJSON + JSON.
 - `chromedriver`: Bundled ChromeDriver (Linux x86_64). Use your own if needed.
-- `SBD.xlsx`, `HCMUS2025.xlsx`: Input spreadsheets (reference).
-- `ketqua.xlsx`, `hcmus.json`: Sample outputs.
 
 ## Prerequisites
 - Python 3.9+
