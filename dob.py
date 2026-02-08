@@ -25,6 +25,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
 BASE_URL = "https://tsdh.hcmus.edu.vn/ketqua-xettuyen"
+OUTPUT_DIR = "Output"
 
 # ---------- Helpers ----------
 def slug_digits(s: str) -> str:
@@ -43,7 +44,7 @@ def normalize_sbd(val) -> Optional[str]:
     return s.zfill(8)
 
 def read_sbd_list(csv_path: str) -> List[str]:
-    df = pd.read_csv(csv_path)
+    df = pd.read_csv(csv_path, encoding="utf-8-sig")
     if "SBD" not in df.columns:
         raise KeyError("CSV must contain column 'SBD'.")
     sbd = (df["SBD"].dropna().astype(str)
@@ -137,12 +138,20 @@ def chunkify(lst: List[str], n: int) -> List[List[str]]:
 def main():
     ap = argparse.ArgumentParser(description="Multi-threaded DOB crawler (Selenium).")
     ap.add_argument("--csv", required=True, help="Path to CSV having 'SBD' column.")
-    ap.add_argument("--out", default="out_dob", help="Output folder (default: out_dob)")
+    ap.add_argument(
+        "--out", default=os.path.join(OUTPUT_DIR, "out_dob"), help="Output folder (default: Output/out_dob)"
+    )
     ap.add_argument("--workers", type=int, default=4, help="Number of threads (each runs its own Chrome).")
     ap.add_argument("--headed", action="store_true", help="Show Chrome windows (default headless).")
     ap.add_argument("--delay", type=float, default=0.6, help="Delay between requests per thread (sec).")
     args = ap.parse_args()
 
+    if (
+        not os.path.isabs(args.out)
+        and args.out != OUTPUT_DIR
+        and not args.out.startswith(f"{OUTPUT_DIR}{os.sep}")
+    ):
+        args.out = os.path.join(OUTPUT_DIR, args.out)
     os.makedirs(args.out, exist_ok=True)
     sbd_list = read_sbd_list(args.csv)
     print(f"Loaded {len(sbd_list)} SBDs")

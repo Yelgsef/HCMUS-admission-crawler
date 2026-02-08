@@ -1,4 +1,5 @@
 import argparse
+import csv
 import queue
 import sys
 import threading
@@ -7,7 +8,6 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from bs4 import BeautifulSoup
-from openpyxl import Workbook, load_workbook
 from selenium import webdriver
 from selenium.common.exceptions import TimeoutException, WebDriverException
 from selenium.webdriver.chrome.options import Options
@@ -18,14 +18,13 @@ from selenium.webdriver.support.ui import WebDriverWait
 
 
 BASE_URL = "https://tsdh.hcmus.edu.vn/ketqua-xettuyen"
+OUTPUT_DIR = Path("Output")
 OUTPUT_COLUMNS = [
     "MSSV",
     "Họ và tên",
-    "Giới tính",
     "Ngày sinh",
     "SBD",
     "CCCD",
-    "Quê quán",
     "Nv",
     "Ngành/Nhóm ngành",
     "PTXT",
@@ -34,27 +33,50 @@ OUTPUT_COLUMNS = [
 ]
 
 
-class ExcelWriter:
+class CsvWriter:
     def __init__(self, path: Path) -> None:
         self.path = path
+        self.written = 0
+        self._has_header = False
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+
         if path.exists():
-            self.wb = load_workbook(path)
-            self.ws = self.wb.active
-            self.written = max(0, self.ws.max_row - 1)
+            with path.open("r", encoding="utf-8-sig", newline="") as handle:
+                reader = csv.reader(handle)
+                try:
+                    first_row = next(reader)
+                except StopIteration:
+                    first_row = None
+
+                if first_row is None:
+                    self._write_header()
+                elif first_row == OUTPUT_COLUMNS:
+                    self._has_header = True
+                    self.written = sum(1 for _ in reader)
+                else:
+                    # Existing file without header: keep as-is.
+                    self._has_header = False
+                    self.written = 1 + sum(1 for _ in reader)
         else:
-            self.wb = Workbook()
-            self.ws = self.wb.active
-            self.ws.title = "KET_QUA"
-            self.ws.append(OUTPUT_COLUMNS)
-            self.wb.save(path)
-            self.written = 0
+            self._write_header()
+
+    def _write_header(self) -> None:
+        with self.path.open("w", encoding="utf-8-sig", newline="") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(OUTPUT_COLUMNS)
+        self._has_header = True
+        self.written = 0
 
     def append_rows(self, rows: List[Dict[str, str]]) -> None:
         if not rows:
             return
-        for row in rows:
-            self.ws.append([row.get(column, "") for column in OUTPUT_COLUMNS])
-        self.wb.save(self.path)
+        with self.path.open("a", encoding="utf-8-sig", newline="") as handle:
+            writer = csv.writer(handle)
+            if not self._has_header:
+                writer.writerow(OUTPUT_COLUMNS)
+                self._has_header = True
+            for row in rows:
+                writer.writerow([row.get(column, "") for column in OUTPUT_COLUMNS])
         self.written += len(rows)
 
 
@@ -150,9 +172,14 @@ def read_sbd_values(path: Path, limit: Optional[int]) -> Iterable[str]:
 
 
 def parse_args(argv: List[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Tra cứu kết quả xét tuyển bằng headless Selenium và ghi ra Excel.")
+    parser = argparse.ArgumentParser(description="Tra cứu kết quả xét tuyển bằng headless Selenium và ghi ra CSV.")
     parser.add_argument("--sbd-file", type=Path, default=Path("sbd.txt"), help="Đường dẫn tới file chứa danh sách SBD.")
-    parser.add_argument("--output", type=Path, default=Path("ketqua.xlsx"), help="Đường dẫn file Excel đầu ra.")
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=OUTPUT_DIR / "ketqua.csv",
+        help="Đường dẫn file CSV đầu ra.",
+    )
     parser.add_argument("--chromedriver", type=Path, default=Path("./chromedriver"), help="Đường dẫn tới chromedriver.")
     parser.add_argument("--limit", type=int, default=None, help="Giới hạn số lượng SBD (để thử nghiệm).")
     parser.add_argument("--throttle", type=float, default=0.3, help="Độ trễ giữa các lần tra cứu (giây).")
@@ -170,9 +197,28 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     )
     return parser.parse_args(argv)
 
+def resolve_output_path(path: Path) -> Path:
+    if path.is_absolute():
+        return path
+    if path.parts and path.parts[0] == OUTPUT_DIR.name:
+        return path
+    return OUTPUT_DIR / path
+
+
+def normalize_output_path(path: Path) -> Path:
+    suffix = path.suffix.lower()
+    if suffix in {".xlsx", ".xls"}:
+        path = path.with_suffix(".csv")
+        print(
+            f"[!] Output {path.with_suffix(suffix)} là Excel. Sẽ ghi CSV ra {path}.",
+            file=sys.stderr,
+        )
+    return resolve_output_path(path)
+
 
 def main(argv: List[str]) -> int:
     args = parse_args(argv)
+    args.output = normalize_output_path(args.output)
 
     if not args.sbd_file.exists():
         print(f"[!] Không tìm thấy file {args.sbd_file}", file=sys.stderr)
@@ -190,7 +236,7 @@ def main(argv: List[str]) -> int:
         print("[!] Không có SBD nào để tra cứu.", file=sys.stderr)
         return 1
 
-    writer = ExcelWriter(args.output)
+    writer = CsvWriter(args.output)
 
     if args.workers <= 1:
         collected = run_sequential(args, sbd_values, writer)
@@ -206,7 +252,7 @@ def main(argv: List[str]) -> int:
 
 
 def run_sequential(
-    args: argparse.Namespace, sbd_values: List[str], writer: ExcelWriter
+    args: argparse.Namespace, sbd_values: List[str], writer: CsvWriter
 ) -> List[Dict[str, str]]:
     driver = build_driver(args.chromedriver, headless=True)
     collected: List[Dict[str, str]] = []
@@ -230,7 +276,7 @@ def run_sequential(
 
 
 def run_parallel(
-    args: argparse.Namespace, sbd_values: List[str], writer: ExcelWriter
+    args: argparse.Namespace, sbd_values: List[str], writer: CsvWriter
 ) -> List[Dict[str, str]]:
     total = len(sbd_values)
     task_queue: "queue.Queue[Optional[List[str]]]" = queue.Queue()

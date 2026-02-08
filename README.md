@@ -1,30 +1,39 @@
 # HCMUS Admission Crawler
 
-Python crawlers to collect admission results from HCMUS (tsdh.hcmus.edu.vn) and related exam data. The main script uses headless Selenium to look up SBDs and export an Excel file in the required format.
+Tools to collect HCMUS admission results, exam scores, and DOBs. All outputs go to `Output/` by default.
 
-## What’s in this repo
-- `main.py`: Crawl admission results from the HCMUS results page and write `ketqua.xlsx` (or a custom output path). Empty “Kết quả xét tuyển” is written as `XXXX`.
-- `dob.py`: Crawl date of birth (DOB) for accepted rows by parsing hidden notice HTML and export CSV/JSON.
-- `crawl.py`: Crawl THPT exam scores from the Tuổi Trẻ API and export NDJSON + JSON.
-- `chromedriver`: Bundled ChromeDriver (Linux x86_64). Use your own if needed.
+**Scripts**
+- `main.py`: Crawl admission results from the HCMUS results page and write `Output/ketqua.csv`.
+- `score.py`: Crawl THPT exam scores from the Tuổi Trẻ API and write `Output/out_score/` (NDJSON, JSON, CSV).
+- `dob.py`: Crawl date of birth (DOB) by parsing hidden notice HTML and write `Output/out_dob/` (CSV, JSON).
+- `pipeline.py`: Run `main.py → score.py → dob.py` and combine everything into `Output/final_result.csv`.
 
-## Prerequisites
+**Requirements**
 - Python 3.9+
 - Google Chrome or Chromium
-- ChromeDriver that matches your Chrome version (use the bundled `chromedriver` or download a compatible one)
+- ChromeDriver that matches your Chrome version (use bundled `chromedriver` or your own)
 
-## Install dependencies
+**Install**
 ```bash
 pip install -r requirements.txt
 ```
 
+**Quick Start**
+```bash
+python pipeline.py \
+  --sbd-file Input/sample.txt \
+  --chromedriver ./chromedriver \
+  --main-limit 50 \
+  --year 2025
+```
+
 ## Usage
 
-### 1) Crawl admission results (main)
+### 1) Admission results (main.py)
 ```bash
 python main.py \
-  --sbd-file sample.txt \
-  --output ketqua.xlsx \
+  --sbd-file sbd.txt \
+  --output Output/ketqua.csv \
   --chromedriver ./chromedriver \
   --limit 50 \
   --workers 1 \
@@ -32,28 +41,60 @@ python main.py \
   --throttle 0.3
 ```
 Notes:
-- `--sbd-file` expects a plain text file with one SBD per line.
+- `--sbd-file` is a plain text file with one SBD per line.
 - Increase `--workers` to run in parallel (each worker opens a Chrome instance).
 
-### 2) Crawl DOBs (dob.py)
-Prepare a CSV with a `SBD` column (export from Excel if needed), then:
+### 2) Exam scores (score.py)
+`score.py` can read the CSV from `main.py` directly.
 ```bash
-python dob.py --csv path/to/sbd.csv --out out_dob --workers 4
+python score.py \
+  --sbd-file Output/ketqua.csv \
+  --year 2025 \
+  --out Output/out_score/out_2025.jsonl
+```
+Outputs:
+- `Output/out_score/out_2025.jsonl` (NDJSON)
+- `Output/out_score/out_2025.json` (JSON array)
+- `Output/out_score/out_scores.csv` (CSV)
+
+### 3) DOBs (dob.py)
+`dob.py` expects a CSV with an `SBD` column (the CSV from `score.py` is supported).
+```bash
+python dob.py \
+  --csv Output/out_score/out_scores.csv \
+  --out Output/out_dob \
+  --workers 4
 ```
 Add `--headed` to show browser windows.
 
-### 3) Crawl THPT scores (crawl.py)
+### 4) Full pipeline (main → score → dob)
 ```bash
-python crawl.py --sbd-file sample.txt --year 2025 --out out_2025.jsonl
+python pipeline.py \
+  --sbd-file Input/sample.txt \
+  --chromedriver ./chromedriver \
+  --main-limit 50 \
+  --main-workers 1 \
+  --main-chunk-size 100 \
+  --main-throttle 0.3 \
+  --score-out Output/out_score/out_2025.jsonl \
+  --score-out-csv Output/out_score/out_scores.csv \
+  --score-workers 32 \
+  --score-chunk 200 \
+  --score-sleep 0.0 \
+  --score-timeout 10.0 \
+  --dob-workers 4 \
+  --dob-delay 0.6 \
+  --year 2025 \
+  --final-out Output/final_result.csv
 ```
-This writes:
-- `out_2025.jsonl` (NDJSON)
-- `out_2025.json` (JSON array)
+Notes:
+- `pipeline.py` feeds `Output/ketqua.csv` into `score.py`, then feeds `Output/out_score/out_scores.csv` into `dob.py`.
+- The combined output is `Output/final_result.csv`.
 
-## Output format (main.py)
+## Output Columns (main.py)
 `main.py` writes the following columns in order:
 `MSSV`, `Họ và tên`, `Giới tính`, `Ngày sinh`, `SBD`, `CCCD`, `Quê quán`, `Nv`, `Ngành/Nhóm ngành`, `PTXT`, `Kết quả xét tuyển`, `Ghi chú`.
 
 ## Tips
-- Start with `sample.txt` and a small `--limit` to validate setup.
+- Start with a small `--limit` to validate setup.
 - Use a reasonable `--throttle` to avoid rate limits or temporary blocks.

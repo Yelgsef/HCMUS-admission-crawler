@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import time
+from pathlib import Path
 from typing import Dict, Any, List, Optional
 
 import requests
@@ -14,6 +15,8 @@ from dask.diagnostics import ProgressBar
 
 
 API_TEMPLATE = "https://s6.tuoitre.vn/api/diem-thi-thpt.htm"
+OUTPUT_DIR = Path("Output")
+SCORE_DIR = OUTPUT_DIR / "out_score"
 
 # Map API fields -> human-friendly Vietnamese subject names
 SUBJECT_NAME_MAP = {
@@ -47,6 +50,19 @@ SUBJECT_PRIORITY = [
     "TIN_HOC",
     "CN_CONG_NGHIEP",
     "CN_NONG_NGHIEP",
+]
+
+SCORE_COLUMNS = [
+    "SBD",
+    "TONGDIEM",
+    "Môn A",
+    "Môn A - Điểm",
+    "Môn B",
+    "Môn B - Điểm",
+    "Môn C",
+    "Môn C - Điểm",
+    "Môn D",
+    "Môn D - Điểm",
 ]
 
 
@@ -143,7 +159,7 @@ def score_numeric_like(value: str) -> bool:
 
 def load_sbd_csv(path: str) -> List[str]:
     sbds: List[str] = []
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, "r", encoding="utf-8-sig") as f:
         reader = csv.reader(f)
         try:
             headers = next(reader)
@@ -200,21 +216,59 @@ def gen_sbd_range(start: int, end: int) -> List[str]:
     return [f"{i:08d}" for i in range(start, end + 1)]
 
 
+def resolve_output_path(path: Path) -> Path:
+    if path.is_absolute():
+        return path
+    if path.parts and path.parts[0] == OUTPUT_DIR.name:
+        return path
+    return OUTPUT_DIR / path
+
+
+def flatten_record(rec: Dict[str, Any]) -> Dict[str, Any]:
+    out: Dict[str, Any] = {
+        "SBD": rec.get("SBD", ""),
+        "TONGDIEM": rec.get("TONGDIEM", ""),
+    }
+    for label in ("Môn A", "Môn B", "Môn C", "Môn D"):
+        subj = rec.get(label)
+        if isinstance(subj, dict):
+            out[label] = subj.get("name", "")
+            out[f"{label} - Điểm"] = subj.get("score", "")
+        else:
+            out[label] = ""
+            out[f"{label} - Điểm"] = ""
+    return out
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Crawl điểm thi THPT from Tuổi Trẻ API using Dask.")
+    parser = argparse.ArgumentParser(description="Crawl điểm thi THPT từ Tuổi Trẻ API bằng Dask.")
     g = parser.add_mutually_exclusive_group(required=True)
-    g.add_argument("--sbd-file", type=str, help="Path to TXT/CSV containing SBDs.")
+    g.add_argument("--sbd-file", type=str, help="Path to TXT/CSV (CSV from main.py is supported).")
     g.add_argument("--start-sbd", type=int, help="Start SBD (inclusive), integer.")
     parser.add_argument("--end-sbd", type=int, help="End SBD (inclusive), integer (required if --start-sbd is set).")
     parser.add_argument("--year", type=int, required=True, help="Exam year (e.g., 2025).")
 
-    parser.add_argument("--out", type=str, required=True, help="Output NDJSON file path (e.g., out_2025.jsonl).")
+    parser.add_argument(
+        "--out",
+        type=str,
+        default=str(SCORE_DIR / "out_scores.jsonl"),
+        help="Output NDJSON file path (default: Output/out_score/out_scores.jsonl).",
+    )
+    parser.add_argument(
+        "--out-csv",
+        type=str,
+        default=str(SCORE_DIR / "out_scores.csv"),
+        help="Output CSV file path (default: Output/out_score/out_scores.csv).",
+    )
     parser.add_argument("--workers", type=int, default=32, help="Number of Dask threads (default: 32).")
     parser.add_argument("--chunk", type=int, default=200, help="Partition size for Dask bag (default: 200).")
     parser.add_argument("--sleep", type=float, default=0.0, help="Optional sleep seconds between requests.")
     parser.add_argument("--timeout", type=float, default=10.0, help="Per-request timeout seconds.")
 
     args = parser.parse_args()
+
+    out_path = resolve_output_path(Path(args.out))
+    out_csv_path = resolve_output_path(Path(args.out_csv))
 
     # Build SBD list
     if args.sbd_file:
@@ -246,20 +300,25 @@ def main():
     with ProgressBar():
         results: List[Dict[str, Any]] = bag.compute(num_workers=args.workers, scheduler="threads")
 
-    out_path = args.out
-    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     cnt = 0
-    with open(out_path, "w", encoding="utf-8") as fo:
+    with out_path.open("w", encoding="utf-8") as fo:
         for rec in results:
             fo.write(json.dumps(rec, ensure_ascii=False))
             fo.write("\n")
             cnt += 1
 
-    array_path = os.path.splitext(out_path)[0] + ".json"
-    with open(array_path, "w", encoding="utf-8") as fa:
+    array_path = out_path.with_suffix(".json")
+    with array_path.open("w", encoding="utf-8") as fa:
         json.dump(results, fa, ensure_ascii=False, indent=2)
 
-    print(f"Done. Wrote {cnt} records to:\n - {out_path}\n - {array_path}")
+    with out_csv_path.open("w", encoding="utf-8-sig", newline="") as fc:
+        writer = csv.DictWriter(fc, fieldnames=SCORE_COLUMNS)
+        writer.writeheader()
+        for rec in results:
+            writer.writerow(flatten_record(rec))
+
+    print(f"Done. Wrote {cnt} records to:\n - {out_path}\n - {array_path}\n - {out_csv_path}")
 
 
 if __name__ == "__main__":
