@@ -93,7 +93,7 @@ Notes:
 
 ## Output Columns (main.py)
 `main.py` writes the following columns in order:
-`MSSV`, `Họ và tên`, `Giới tính`, `Ngày sinh`, `SBD`, `CCCD`, `Quê quán`, `Nv`, `Ngành/Nhóm ngành`, `PTXT`, `Kết quả xét tuyển`, `Ghi chú`.
+`MSSV`, `Họ và tên`, `Ngày sinh`, `SBD`, `CCCD`, `Nv`, `Ngành/Nhóm ngành`, `PTXT`, `Kết quả xét tuyển`, `Ghi chú`.
 
 ## Tips
 - Start with a small `--limit` to validate setup.
